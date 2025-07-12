@@ -4,7 +4,7 @@
 
 ### 👀 Repository Views
 
-<img alt="count" src="https://count.getloli.com/get/@:EXLOUD-Office-Telemetry-Disable?theme=morden-num" />
+<img alt="count" src="https://count.getloli.com/get/@:EXLOUD-Office-Telemetry-Disable?theme=nixietube-1" />
 
 **⭐ If this tool helped you, please consider giving it a star! ⭐**
 
