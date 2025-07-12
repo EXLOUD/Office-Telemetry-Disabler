@@ -1,19 +1,25 @@
+<div align="center">
+
 # Office Privacy and Telemetry Disabler
 
-<div align="center">
-  <img src="assets/preview.gif" alt="Office Privacy and Telemetry Disabler Logo" width="500" height="400">
-</div>
+### 👀 Repository Views
 
-<div align="center">
+<img alt="count" src="https://count.getloli.com/get/@:EXLOUD-Office-Telemetry-Disable?theme=rule34" />
+
+**⭐ If this tool helped you, please consider giving it a star! ⭐**
+
+---
+
+<img src="assets/preview.gif" alt="Office Privacy and Telemetry Disabler Logo" width="400" height="300">
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5%2B-blue.svg)
 ![Windows](https://img.shields.io/badge/Windows-7%2F8%2F10%2F11-blue.svg)
 ![Office](https://img.shields.io/badge/Office-2010--2024-orange.svg)
 
-</div>
-
 A comprehensive PowerShell script to disable Microsoft Office logging, telemetry, and privacy features across all Office versions (2010-2024) and Windows versions (7-11).
+
+</div>
 
 ## 🚀 Features
 
@@ -73,6 +79,7 @@ A comprehensive PowerShell script to disable Microsoft Office logging, telemetry
 
 ## 🎯 Supported Versions
 
+
 ### Office Versions
 | Version | Year | Status |
 |---------|------|--------|
@@ -82,13 +89,16 @@ A comprehensive PowerShell script to disable Microsoft Office logging, telemetry
 | 17.0 | Office 2021 | ✅ Supported |
 | 18.0 | Office 2024 | ✅ Supported |
 
+
 ### Windows Versions
+
 | Version | Status | Script Used |
 |---------|--------|-------------|
 | Windows 7 | ✅ Supported | `office_privacy_telemetry_disabler_win7+.ps1` |
 | Windows 8/8.1 | ✅ Supported | `office_privacy_telemetry_disabler_win7+.ps1` |
 | Windows 10 | ✅ Supported | `office_privacy_telemetry_disabler.ps1` but you can run both |
 | Windows 11 | ✅ Supported | `office_privacy_telemetry_disabler.ps1` but you can run both |
+
 
 ## 🔧 Requirements
 
@@ -186,6 +196,10 @@ If you encounter any issues:
 
 ---
 
+<div align="center">
+
 **Made with ❤️ by [EXLOUD](https://github.com/EXLOUD)**
 
 *Protecting your privacy across all Windows versions, one script at a time.*
+
+</div>
