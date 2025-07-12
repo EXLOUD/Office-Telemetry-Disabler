@@ -10,7 +10,7 @@
 
 ---
 
-<img src="assets/preview.gif" alt="Office Privacy and Telemetry Disabler Logo" width="400" height="300">
+<img src="assets/preview.gif" alt="Office Privacy and Telemetry Disabler Logo" width="600" height="400">
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5%2B-blue.svg)
