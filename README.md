@@ -2,7 +2,7 @@
 
 ### 👇
 
-[![Download My Installation Script](https://img.shields.io/badge/Download_My_Script-brightgreen?style=for-the-badge&logo=powershell&logoColor=white)](https://github.com/EXLOUD/Office-Telemetry-Disabler/archive/refs/heads/main.zip)
+[![Download My Installation Script](https://img.shields.io/badge/Download_My_Script-darkgreen?style=for-the-badge&logo=powershell&logoColor=white)](https://github.com/EXLOUD/Office-Telemetry-Disabler/archive/refs/heads/main.zip)
 
 ---
 
