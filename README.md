@@ -91,9 +91,7 @@ A comprehensive PowerShell script to disable Microsoft Office logging, telemetry
 |---------|------|--------|
 | 14.0 | Office 2010 | ✅ Supported |
 | 15.0 | Office 2013 | ✅ Supported |
-| 16.0 | Office 2016/2019 | ✅ Supported |
-| 17.0 | Office 2021 | ✅ Supported |
-| 18.0 | Office 2024 | ✅ Supported |
+| 16.0 | Office 2016/365/2019/2021/2024 | ✅ Supported |
 
 
 ### Windows Versions
