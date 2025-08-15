@@ -150,7 +150,7 @@ echo.
 echo ====================================================
 echo    Office Privacy and Telemetry Disabler Launcher
 echo.
-echo                      by EXLOUD
+echo                 by EXLOUD aka BOBER
 echo              https://github.com/EXLOUD
 echo ====================================================
 echo.
@@ -202,10 +202,6 @@ cd /d "%SCRIPT_DIR%"
 
 if %errorLevel% == 0 (
     echo.
-    echo [SUCCESS] Script completed successfully!
-    echo.
-    echo Office privacy and telemetry settings have been disabled.
-    echo Some changes may require restarting Office applications.
 ) else (
     echo.
     echo [ERROR] Script encountered errors. Exit code: %errorLevel%
