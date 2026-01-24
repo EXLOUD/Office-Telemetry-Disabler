@@ -42,12 +42,14 @@ $isAdmin = $false
 try {
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-} catch {
+}
+catch {
     try {
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
         $isAdmin = $principal.IsInRole("Administrators")
-    } catch {
+    }
+    catch {
         Write-Host "  [!] Cannot determine admin rights, proceeding with caution" -ForegroundColor $Colors.Warning
         $isAdmin = $false
     }
@@ -59,7 +61,8 @@ if (-not $isAdmin) {
     Write-Host ""
     Read-Host "Press Enter to exit"
     exit 1
-} else {
+}
+else {
     Write-Host "  [OK] Running with administrator privileges." -ForegroundColor $Colors.Success
 }
 
@@ -68,9 +71,179 @@ Write-Host "  [INFO] Detected: $windowsVersion" -ForegroundColor $Colors.Info
 
 # Define supported Office versions
 $OfficeVersions = @{
-    "14.0" = "Office 2010"
-    "15.0" = "Office 2013"
-    "16.0" = "Office 2016/365/2019/2021/2024"
+    "14.0" = @{ Name = "Office 2010"; Year = "2010" }
+    "15.0" = @{ Name = "Office 2013"; Year = "2013" }
+    "16.0" = @{ Name = "Office 2016/365/2019/2021/2024"; Year = "2016" }
+}
+
+# =======================================================
+# OFFICE DETECTION FUNCTION
+# =======================================================
+
+function Test-OfficeInstalled {
+    param(
+        [string]$Version,
+        [string]$Year
+    )
+    
+    $detected = $false
+    $detectionMethod = ""
+    $installPath = ""
+    
+    # Method 1: Check InstallRoot registry key (most reliable)
+    $installRootPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Office\$Version\Common\InstallRoot",
+        "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Office\$Version\Common\InstallRoot"
+    )
+    
+    foreach ($regPath in $installRootPaths) {
+        if (Test-Path $regPath) {
+            $props = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+            if ($props -and $props.Path) {
+                $installPath = $props.Path
+                if (Test-Path $installPath -ErrorAction SilentlyContinue) {
+                    # Verify Office executables exist
+                    $officeApps = @("WINWORD.EXE", "EXCEL.EXE", "POWERPNT.EXE", "OUTLOOK.EXE")
+                    foreach ($app in $officeApps) {
+                        $appPath = Join-Path $installPath $app
+                        if (Test-Path $appPath -ErrorAction SilentlyContinue) {
+                            $detected = $true
+                            $detectionMethod = "InstallRoot ($app)"
+                            break
+                        }
+                    }
+                }
+                if ($detected) { break }
+            }
+        }
+    }
+    
+    # Method 2: Check Click-to-Run for version 16.0
+    if (!$detected -and $Version -eq "16.0") {
+        $ctrPath = "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
+        if (Test-Path $ctrPath) {
+            $ctrProps = Get-ItemProperty -Path $ctrPath -ErrorAction SilentlyContinue
+            if ($ctrProps) {
+                # Check for actual installation path
+                $ctrInstallPath = $ctrProps.InstallationPath
+                if ($ctrInstallPath -and (Test-Path $ctrInstallPath -ErrorAction SilentlyContinue)) {
+                    # Verify Office executables exist in C2R path
+                    $officeApps = @("WINWORD.EXE", "EXCEL.EXE", "POWERPNT.EXE", "OUTLOOK.EXE")
+                    $rootPath = Join-Path $ctrInstallPath "root\Office16"
+                    foreach ($app in $officeApps) {
+                        $appPath = Join-Path $rootPath $app
+                        if (Test-Path $appPath -ErrorAction SilentlyContinue) {
+                            $detected = $true
+                            $detectionMethod = "Click-to-Run ($app)"
+                            $installPath = $rootPath
+                            break
+                        }
+                    }
+                }
+                
+                # Alternative: check ProductReleaseIds
+                if (!$detected -and $ctrProps.ProductReleaseIds) {
+                    $detected = $true
+                    $detectionMethod = "Click-to-Run (ProductReleaseIds)"
+                }
+            }
+        }
+    }
+    
+    # Method 3: Check Uninstall registry keys
+    if (!$detected) {
+        $uninstallPaths = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+        )
+        
+        $searchPatterns = @()
+        switch ($Version) {
+            "14.0" { $searchPatterns = @("*Office*2010*", "*Office 14*") }
+            "15.0" { $searchPatterns = @("*Office*2013*", "*Office 15*") }
+            "16.0" { $searchPatterns = @("*Office*2016*", "*Office*2019*", "*Office*2021*", "*Office*2024*", "*Microsoft 365*", "*Office 16*") }
+        }
+        
+        foreach ($uninstallPath in $uninstallPaths) {
+            try {
+                $apps = Get-ItemProperty $uninstallPath -ErrorAction SilentlyContinue
+                foreach ($app in $apps) {
+                    if ($app.DisplayName) {
+                        foreach ($pattern in $searchPatterns) {
+                            if ($app.DisplayName -like $pattern) {
+                                # Verify it's not just a component but actual Office
+                                if ($app.DisplayName -match "Microsoft Office|Microsoft 365|Office Professional|Office Home|Office Standard|Office Business") {
+                                    $detected = $true
+                                    $detectionMethod = "Uninstall registry ($($app.DisplayName))"
+                                    if ($app.InstallLocation) {
+                                        $installPath = $app.InstallLocation
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                        if ($detected) { break }
+                    }
+                }
+                if ($detected) { break }
+            }
+            catch {
+                # Continue to next path
+            }
+        }
+    }
+    
+    # Method 4: Check common installation paths
+    if (!$detected) {
+        $commonPaths = @()
+        
+        switch ($Version) {
+            "14.0" {
+                $commonPaths = @(
+                    "${env:ProgramFiles}\Microsoft Office\Office14",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office14"
+                )
+            }
+            "15.0" {
+                $commonPaths = @(
+                    "${env:ProgramFiles}\Microsoft Office\Office15",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office15",
+                    "${env:ProgramFiles}\Microsoft Office 15\root\office15",
+                    "${env:ProgramFiles(x86)}\Microsoft Office 15\root\office15"
+                )
+            }
+            "16.0" {
+                $commonPaths = @(
+                    "${env:ProgramFiles}\Microsoft Office\Office16",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\Office16",
+                    "${env:ProgramFiles}\Microsoft Office\root\Office16",
+                    "${env:ProgramFiles(x86)}\Microsoft Office\root\Office16"
+                )
+            }
+        }
+        
+        foreach ($path in $commonPaths) {
+            if (Test-Path $path -ErrorAction SilentlyContinue) {
+                $officeApps = @("WINWORD.EXE", "EXCEL.EXE", "POWERPNT.EXE", "OUTLOOK.EXE")
+                foreach ($app in $officeApps) {
+                    $appPath = Join-Path $path $app
+                    if (Test-Path $appPath -ErrorAction SilentlyContinue) {
+                        $detected = $true
+                        $detectionMethod = "File path ($app)"
+                        $installPath = $path
+                        break
+                    }
+                }
+                if ($detected) { break }
+            }
+        }
+    }
+    
+    return @{
+        Detected    = $detected
+        Method      = $detectionMethod
+        InstallPath = $installPath
+    }
 }
 
 # Function to set registry value with logging
@@ -79,7 +252,7 @@ function Set-RegistryValueWithLogging {
         [string]$Path,
         [string]$Name,
         [string]$Type,
-        [Parameter(Mandatory=$true)]
+        [Parameter(Mandatory = $true)]
         $Value,
         [string]$Description
     )
@@ -121,7 +294,8 @@ function Disable-ScheduledTaskWithLogging {
                 if ($taskState -eq 'Disabled') {
                     Write-Host "  [OK] Task already disabled: $TaskName" -ForegroundColor $Colors.Success
                     $script:telemetryTasksDisabled++
-                } else {
+                }
+                else {
                     Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
                     Write-Host "  [OK] Found and disabled: $TaskName" -ForegroundColor $Colors.Changed
                     $script:telemetryTasksDisabled++
@@ -130,25 +304,28 @@ function Disable-ScheduledTaskWithLogging {
                 if ($Description) {
                     Write-Host "    Description: $Description" -ForegroundColor $Colors.Info
                 }
-            } else {
+            }
+            else {
                 Write-Host "  [SKIP] Task not found: $TaskName" -ForegroundColor $Colors.NotFound
                 $script:telemetryTasksNotFound++
             }
-        } else {
+        }
+        else {
             $taskPath = $TaskName -replace "Microsoft\\", "\"
             $queryResult = & schtasks.exe /Query /TN $taskPath 2>$null
             if ($LASTEXITCODE -eq 0) {
-                # Використовуємо $queryResult для отримання інформації про завдання
-                $taskInfo = $queryResult | ConvertFrom-Csv -ErrorAction SilentlyContinue
-                if ($taskInfo -and $taskInfo.Status -eq "Disabled") {
+                $taskInfo = $queryResult | Where-Object { $_ -match "Disabled" -or $_ -match "��������" }
+                if ($taskInfo) {
                     Write-Host "  [OK] Task already disabled: $TaskName" -ForegroundColor $Colors.Success
                     $script:telemetryTasksDisabled++
-                } else {
+                }
+                else {
                     & schtasks.exe /Change /TN $taskPath /DISABLE >$null 2>&1
                     if ($LASTEXITCODE -eq 0) {
                         Write-Host "  [OK] Found and disabled: $TaskName" -ForegroundColor $Colors.Changed
                         $script:telemetryTasksDisabled++
-                    } else {
+                    }
+                    else {
                         Write-Host "  [ERROR] Failed to disable: $TaskName" -ForegroundColor $Colors.Error
                     }
                 }
@@ -156,54 +333,59 @@ function Disable-ScheduledTaskWithLogging {
                 if ($Description) {
                     Write-Host "    Description: $Description" -ForegroundColor $Colors.Info
                 }
-            } else {
+            }
+            else {
                 Write-Host "  [SKIP] Task not found: $TaskName" -ForegroundColor $Colors.NotFound
                 $script:telemetryTasksNotFound++
             }
         }
-    } catch {
+    }
+    catch {
         Write-Host "  [ERROR] Error disabling $TaskName : $($_.Exception.Message)" -ForegroundColor $Colors.Error
     }
 }
 
-# Detect installed Office versions
-$installedVersions = @()
-if (Test-Path "HKCU:\SOFTWARE\Microsoft\Office") {
-    $hkcuVersions = Get-ChildItem -Path "HKCU:\SOFTWARE\Microsoft\Office" -ErrorAction SilentlyContinue | 
-        Where-Object { $_.PSChildName -match "^\d+\.\d+$" -and $OfficeVersions.ContainsKey($_.PSChildName) } | 
-        Select-Object -ExpandProperty PSChildName
-    if ($hkcuVersions) { 
-        $installedVersions += $hkcuVersions 
-        Write-Host "  [INFO] Found in HKCU: $($hkcuVersions -join ', ')" -ForegroundColor $Colors.Info
-    }
-}
-if (Test-Path "HKLM:\SOFTWARE\Microsoft\Office") {
-    $hklmVersions = Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Office" -ErrorAction SilentlyContinue | 
-        Where-Object { $_.PSChildName -match "^\d+\.\d+$" -and $OfficeVersions.ContainsKey($_.PSChildName) } | 
-        Select-Object -ExpandProperty PSChildName
-    if ($hklmVersions) { 
-        $installedVersions += $hklmVersions 
-        Write-Host "  [INFO] Found in HKLM: $($hklmVersions -join ', ')" -ForegroundColor $Colors.Info
-    }
-}
-if (Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun") {
-    $ctrVersions = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -ErrorAction SilentlyContinue | 
-        Select-Object -ExpandProperty VersionToReport
-    if ($ctrVersions -and $ctrVersions -match "^\d+\.\d+\.\d+\.\d+$" -and "16.0" -notin $installedVersions) {
-        $installedVersions += "16.0"
-        Write-Host "  [INFO] Found Click-to-Run: 16.0" -ForegroundColor $Colors.Info
-    }
-}
-$installedVersions = $installedVersions | Sort-Object -Unique
-Write-Host "  [INFO] Total unique versions: $($installedVersions -join ', ')" -ForegroundColor $Colors.Info
+# =======================================================
+# DETECT INSTALLED OFFICE VERSIONS
+# =======================================================
+Write-Host "`n--- Detecting Installed Office Versions ---" -ForegroundColor $Colors.Section
 
-if (-not $installedVersions) {
-    Write-Host "No supported Office versions found in registry. Please ensure Microsoft Office is installed." -ForegroundColor $Colors.Error
-    exit
+$installedVersions = @()
+
+foreach ($version in $OfficeVersions.Keys | Sort-Object) {
+    $officeInfo = $OfficeVersions[$version]
+    $officeName = $officeInfo.Name
+    $officeYear = $officeInfo.Year
+    
+    $result = Test-OfficeInstalled -Version $version -Year $officeYear
+    
+    if ($result.Detected) {
+        Write-Host "  [OK] Detected: $officeName (version $version) via $($result.Method)" -ForegroundColor $Colors.Success
+        if ($result.InstallPath) {
+            Write-Host "    Install path: $($result.InstallPath)" -ForegroundColor $Colors.Info
+        }
+        $installedVersions += $version
+    }
+    else {
+        Write-Host "  [SKIP] Not installed: $officeName (version $version)" -ForegroundColor $Colors.Gray
+    }
+}
+
+if ($installedVersions.Count -eq 0) {
+    Write-Host "`n  [ERROR] No supported Office versions found." -ForegroundColor $Colors.Error
+    Write-Host "    Please ensure Microsoft Office is installed." -ForegroundColor $Colors.Warning
+    Read-Host "`nPress Enter to exit"
+    exit 1
+}
+else {
+    Write-Host "`n  [INFO] Found $($installedVersions.Count) Office installation(s)" -ForegroundColor $Colors.Info
 }
 
 $modernVersions = $installedVersions | Where-Object { $_ -ge "16.0" }
 $updateVersions = $installedVersions | Where-Object { $_ -ge "15.0" }
+
+# Check for Click-to-Run installation
+$hasClickToRun = Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
 
 # Initialize counters for tasks
 $script:telemetryTasksProcessed = 0
@@ -218,12 +400,12 @@ Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\Common\Clien
 Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\Common\ClientTelemetry" -Name "SendTelemetry" -Type "DWord" -Value 3 -Description "Set telemetry level to minimum"
 Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Policies\Microsoft\Office\Common\ClientTelemetry" -Name "SendTelemetry" -Type "DWord" -Value 3 -Description "Set telemetry level to minimum (Policies)"
 
-if (Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration") {
+if ($hasClickToRun) {
     Set-RegistryValueWithLogging -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "SendTelemetry" -Type "DWord" -Value 3 -Description "Set telemetry level to minimum (ClickToRun)"
 }
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) telemetry..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) telemetry..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\ClientTelemetry" -Name "DisableTelemetry" -Type "DWord" -Value 1 -Description "Disable telemetry"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\ClientTelemetry" -Name "VerboseLogging" -Type "DWord" -Value 0 -Description "Disable verbose logging"
@@ -233,7 +415,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling Customer Experience Improvement Program ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) CEIP..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) CEIP..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common" -Name "QMEnable" -Type "DWord" -Value 0 -Description "Disable CEIP"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common" -Name "sendcustomerdata" -Type "DWord" -Value 0 -Description "Disable customer data collection"
@@ -248,7 +430,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling feedback ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) feedback..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) feedback..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\Feedback" -Name "Enabled" -Type "DWord" -Value 0 -Description "Disable feedback"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\Feedback" -Name "includescreenshot" -Type "DWord" -Value 0 -Description "Disable screenshot in feedback"
@@ -262,7 +444,7 @@ foreach ($version in $installedVersions) {
 # Disable Connected Experiences
 Write-Host "`n--- Disabling Connected Experiences ---" -ForegroundColor $Colors.Section
 
-if (Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration") {
+if ($hasClickToRun) {
     Set-RegistryValueWithLogging -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "UserContentDisabled" -Type "DWord" -Value 2 -Description "Disable content analysis (ClickToRun)"
     Set-RegistryValueWithLogging -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "DownloadContentDisabled" -Type "DWord" -Value 2 -Description "Disable online content download (ClickToRun)"
     Set-RegistryValueWithLogging -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "DisconnectedState" -Type "DWord" -Value 2 -Description "Set disconnected state (ClickToRun)"
@@ -271,7 +453,7 @@ if (Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration") {
 }
 
 foreach ($version in $modernVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) connected experiences..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) connected experiences..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\Privacy" -Name "UserContentDisabled" -Type "DWord" -Value 2 -Description "Disable content analysis"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\Privacy" -Name "DownloadContentDisabled" -Type "DWord" -Value 2 -Description "Disable online content download"
@@ -287,12 +469,12 @@ foreach ($version in $modernVersions) {
 # Disable Office updates and notifications
 Write-Host "`n--- Disabling Office updates and notifications ---" -ForegroundColor $Colors.Section
 
-if (Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration") {
+if ($hasClickToRun) {
     Set-RegistryValueWithLogging -Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -Name "UpdatesEnabled" -Type "String" -Value "False" -Description "Disable automatic updates (ClickToRun)"
 }
 
 foreach ($version in $updateVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) updates and notifications..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) updates and notifications..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Update" -Name "OfficeMgmtCOM" -Type "DWord" -Value 0 -Description "Disable Office management COM"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Update" -Name "EnableAutomaticUpdates" -Type "DWord" -Value 0 -Description "Disable automatic updates"
@@ -303,7 +485,7 @@ foreach ($version in $updateVersions) {
 Write-Host "`n--- Disabling Microsoft Office logging ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) logging..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) logging..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Outlook\Options\Mail" -Name "EnableLogging" -Type "DWord" -Value 0 -Description "Disable Outlook mail logging"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Word\Options" -Name "EnableLogging" -Type "DWord" -Value 0 -Description "Disable Word logging"
@@ -317,7 +499,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling First Run Settings ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) First Run settings..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) First Run settings..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Firstrun" -Name "BootedRTM" -Type "DWord" -Value 1 -Description "Mark Office as booted"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Firstrun" -Name "disablemovie" -Type "DWord" -Value 1 -Description "Disable first-run movie"
@@ -329,7 +511,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling Lync Telemetry ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) Lync telemetry..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) Lync telemetry..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Lync" -Name "disableautomaticsendtracing" -Type "DWord" -Value 1 -Description "Disable Lync automatic tracing"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Policies\Microsoft\Office\$version\Lync" -Name "disableautomaticsendtracing" -Type "DWord" -Value 1 -Description "Disable Lync automatic tracing (Policies)"
@@ -339,7 +521,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling Security File Validation Reporting ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) file validation reporting..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) file validation reporting..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\Security\FileValidation" -Name "disablereporting" -Type "DWord" -Value 1 -Description "Disable file validation reporting"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Policies\Microsoft\Office\$version\Common\Security\FileValidation" -Name "disablereporting" -Type "DWord" -Value 1 -Description "Disable file validation reporting (Policies)"
@@ -349,7 +531,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling OSM Prevented Applications and Solution Types ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) OSM prevented settings..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) OSM prevented settings..." -ForegroundColor $Colors.Info
     
     $preventedApps = @("accesssolution", "olksolution", "onenotesolution", "pptsolution", "projectsolution", "publishersolution", "visiosolution", "wdsolution", "xlsolution")
     $preventedTypes = @("agave", "appaddins", "comaddins", "documentfiles", "templatefiles")
@@ -368,7 +550,7 @@ foreach ($version in $installedVersions) {
 Write-Host "`n--- Disabling General Settings ---" -ForegroundColor $Colors.Section
 
 foreach ($version in $installedVersions) {
-    Write-Host "`nProcessing $($OfficeVersions[$version]) General settings..." -ForegroundColor $Colors.Info
+    Write-Host "`nProcessing $($OfficeVersions[$version].Name) General settings..." -ForegroundColor $Colors.Info
     
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\General" -Name "disablecomingsoon" -Type "DWord" -Value 1 -Description "Disable coming soon prompts"
     Set-RegistryValueWithLogging -Path "HKCU:\SOFTWARE\Microsoft\Office\$version\Common\General" -Name "optindisable" -Type "DWord" -Value 1 -Description "Disable opt-in prompts"
@@ -460,10 +642,12 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
             if (Get-Command "Add-MpPreference" -ErrorAction SilentlyContinue) {
                 Add-MpPreference -ExclusionPath "$env:SystemRoot\System32\drivers\etc\hosts" -ErrorAction Stop
                 Write-Host "  [OK] Hosts file added to Windows Defender exclusions" -ForegroundColor $Colors.Success
-            } else {
+            }
+            else {
                 Write-Host "  [WARN] Maybe defender deleted :)" -ForegroundColor $Colors.Skip
             }
-        } catch {
+        }
+        catch {
             Write-Host "  [ERROR] Unable to add $($_.Exception.Message)" -ForegroundColor $Colors.Error
         }
         
@@ -490,7 +674,8 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
                 Add-Content -Path $hostsFile -Value "0.0.0.0 $domain" -Force
                 Write-Host "  [OK] Blocked domain: $domain" -ForegroundColor $Colors.OK
                 $addedCount++
-            } else {
+            }
+            else {
                 Write-Host "  [SKIP] Domain already blocked: $domain" -ForegroundColor $Colors.Skip
                 $skippedCount++
             }
@@ -498,7 +683,8 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
         
         if ($addedCount -eq 0) {
             Write-Host "  [SKIP] All telemetry domains already blocked" -ForegroundColor $Colors.Skip
-        } else {
+        }
+        else {
             Write-Host "  [OK] Added $addedCount new entries to hosts file" -ForegroundColor $Colors.Success
         }
 
@@ -507,18 +693,18 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
         Write-Host "    Newly blocked: $addedCount" -ForegroundColor $Colors.Changed
         Write-Host "    Already blocked: $skippedCount" -ForegroundColor $Colors.Success
         
-        # Відновлення оригінальних атрибутів файлу
         try {
             Set-ItemProperty -Path $hostsFile -Name Attributes -Value $originalAttributes
             Write-Host "  [OK] Restored original file attributes" -ForegroundColor $Colors.Success
-        } catch {
+        }
+        catch {
             Write-Host "  [WARN] Could not restore original attributes: $($_.Exception.Message)" -ForegroundColor $Colors.Warning
-            # Fallback - принаймні встановлюємо IsReadOnly якщо воно було
             if ($wasReadOnly) {
                 try {
                     Set-ItemProperty -Path $hostsFile -Name IsReadOnly -Value $true
                     Write-Host "  [OK] Restored read-only attribute as fallback" -ForegroundColor $Colors.Success
-                } catch {
+                }
+                catch {
                     Write-Host "  [ERROR] Could not restore read-only attribute: $($_.Exception.Message)" -ForegroundColor $Colors.Error
                 }
             }
@@ -529,21 +715,25 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
             try {
                 & "$env:SystemRoot\System32\ipconfig.exe" /flushdns | Out-Null
                 $flushSuccess = $true
-            } catch {
+            }
+            catch {
                 try {
                     if (Get-Command "Clear-DnsClientCache" -ErrorAction SilentlyContinue) {
                         Clear-DnsClientCache -ErrorAction Stop
                         $flushSuccess = $true
                     }
-                } catch { }
+                }
+                catch { }
             }
             
             if ($flushSuccess) {
                 Write-Host "  [OK] DNS cache flushed" -ForegroundColor $Colors.Success
-            } else {
+            }
+            else {
                 Write-Host "  [WARN] Could not flush DNS cache (not critical)" -ForegroundColor $Colors.Warning
             }
-        } catch {
+        }
+        catch {
             Write-Host "  [WARN] Could not flush DNS cache (not critical)" -ForegroundColor $Colors.Warning
         }
     }
@@ -554,19 +744,22 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
             try {
                 Set-ItemProperty -Path $hostsFile -Name Attributes -Value $originalAttributes
                 Write-Host "  [OK] Restored original attributes after error" -ForegroundColor $Colors.Warning
-            } catch {
+            }
+            catch {
                 if ($wasReadOnly) {
                     try {
                         Set-ItemProperty -Path $hostsFile -Name IsReadOnly -Value $true
                         Write-Host "  [OK] Restored read-only attribute after error" -ForegroundColor $Colors.Warning
-                    } catch {
+                    }
+                    catch {
                         Write-Host "  [ERROR] Could not restore attributes after error: $($_.Exception.Message)" -ForegroundColor $Colors.Error
                     }
                 }
             }
         }
     }
-} else {
+}
+else {
     Write-Host "  [SKIP] Hosts file modification skipped by user" -ForegroundColor $Colors.Skip
 }
 
@@ -574,7 +767,19 @@ if ($applyHostsBlock -eq 'y' -or $applyHostsBlock -eq 'Y') {
 Write-Host ("`n" + ("=" * 75)) -ForegroundColor $Colors.Title
 Write-Host ("Script Execution Summary".PadLeft(50)) -ForegroundColor $Colors.Title
 Write-Host ("=" * 75) -ForegroundColor $Colors.Title
-Write-Host "`n  > Office versions processed: $($installedVersions -join ', ')" -ForegroundColor $Colors.Success
+
+Write-Host "`n  Office versions processed:" -ForegroundColor $Colors.Info
+foreach ($version in $installedVersions | Sort-Object) {
+    Write-Host "    [OK] $($OfficeVersions[$version].Name) (detected)" -ForegroundColor $Colors.Success
+}
+
+# Show skipped versions
+$skippedVersions = $OfficeVersions.Keys | Where-Object { $_ -notin $installedVersions } | Sort-Object
+foreach ($version in $skippedVersions) {
+    Write-Host "    [SKIP] $($OfficeVersions[$version].Name) (not installed)" -ForegroundColor $Colors.Gray
+}
+
+Write-Host "`n  > Click-to-Run: $(if ($hasClickToRun) { 'Detected and configured' } else { 'Not detected' })" -ForegroundColor $(if ($hasClickToRun) { $Colors.Success } else { $Colors.Gray })
 Write-Host "  > Registry settings applied or skipped: (Check output above for details)" -ForegroundColor $Colors.Success
 Write-Host "  > Scheduled tasks processed: $($script:telemetryTasksProcessed)" -ForegroundColor $Colors.Success
 Write-Host "    - Disabled: $($script:telemetryTasksDisabled)" -ForegroundColor $Colors.Changed
