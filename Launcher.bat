@@ -198,7 +198,7 @@ echo.
 
 cd /d "%SCRIPT_DIR%"
 
-"%PS_EXE%" -ExecutionPolicy Bypass -NoProfile -File "!PS_SCRIPT!"
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '!PS_SCRIPT!')))"
 
 if %errorLevel% == 0 (
     echo.
